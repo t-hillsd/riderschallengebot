@@ -1,103 +1,47 @@
 import praw
-import functions.db as db
-import prawcore.exceptions as pc
+
+import db
+
+SUBREDDIT = "riderschallengetest"
+WANTED_KEYWORDS = ["complete"]
 
 
-
-#Establish a Reddit Session
-reddit = praw.Reddit()
-sub = reddit.subreddit("riderschallengetest")
-
-def process_post(post):
-    user = post.author.name
-    db.add_point(user)
-    flair_update = str(db.get_points(user)) + ' | ' + db.get_flair(user)
-    print(flair_update)
-    return flair_update
-
-#check for formerly stickied post
-def get_sticky_id():
-    print("attempting to get stickies...")
-    try:
-        return sub.sticky(number=2).id
-    except pc.NotFound as e:
-        print(e)
-        return False
-    except pc.Forbidden as f:
-        print(f)
-        return False
-
-# Listening for Complete keyword in titles to reply to. 
-for post in reddit.subreddit("riderschallengetest").stream.submissions():
-    
-    if post.saved:
-        continue
-    
+def add_point_and_generate_flair(user):
+    with db.cursor() as c:
+        if db.user_exists(c, user):
+            db.add_point(c, user)
+            return f"{db.get_points(user)} | {db.get_flair(user)}"
+        else:
+            db.create_user(c, user, points=1)
+            return f"1 | {db.DEFAULT_FLAIR_TEXT}"
 
 
-    has_keyword = any(k.lower() in post.title.lower() for k in ["complete"])
-    not_self = post.author.name != reddit.user.me.name()
-    if has_keyword and not_self:
-        post.save()
-        sticky_id = get_sticky_id()
-        print(sticky_id)
-        try:
-            sticky = reddit.submission(sticky_id)
-            print(type(sticky))
-            print(sticky)
-            sticky.mod.flair(text="",)    
-        except pc.Forbidden as f:
-            print(f)
+def is_wanted_submission(reddit, post):
+    has_keyword = any(k.lower() in post.title.lower() for k in WANTED_KEYWORDS)
+    is_self = post.author.name == reddit.user.me.name()
+    if has_keyword and not is_self:
+        return True
+
+
+def main():
+    reddit = praw.Reddit()
+    sub = reddit.subreddit(SUBREDDIT)
+
+    for post in sub.stream.submissions():
+        if post.saved or not is_wanted_submission(reddit, post):
             continue
-            
-        to_post = process_post(post)
-        print(to_post)
-        reddit.subreddit("riderschallengetest").flair.set(post.author.name, text=to_post)
+
+        post.save()
+
+        # not entirely sure what all the reddit logic here is supposed to achieve
+        sub.sticky(number=2).mod.flair(text="")
+
+        new_flair = add_point_and_generate_flair(post.author.name)
+
+        sub.flair.set(post.author.name, text=new_flair)
         post.mod.sticky()
-        post.mod.flair(text="Current Challenge",)
+        post.mod.flair(text="Current Challenge")
 
-###################################################################
-############ Implementation of multi-stream listening: ############
-###################################################################
 
-# comment_stream = sub.stream.comments(pause_after=-1) # Special Case to be able to pass "None" to active listener
-# submission_stream = sub.stream.submissions(pause_after=-1) # Special Case to be able to pass "None" to active listener
-# while True:
-
-#___________________Active Listener for Comments___________________#
-
-#     for comment in comment_stream:
-#         if comment is None:
-#             break
-#         print(comment.author)
-
-#__________________Active Listener for Submissions__________________#
-
-#     for submission in submission_stream:
-#         if submission is None:
-#             break
-#         for post in reddit.subreddit("riderschallengetest").stream.submissions():
-
-        # if post.saved:
-        #     continue
-
-        # has_keyword = any(k.lower() in post.title.lower() for k in KEYWORDS)
-        # not_self = post.author.name != reddit.user.me.name()
-        # if has_keyword and not_self:
-        #     post.save()
-        #     sticky_id = get_sticky_id()
-        #     print(sticky_id)
-        #     try:
-        #         sticky = reddit.submission(sticky_id)
-        #         print(type(sticky))
-        #         print(sticky)
-        #         sticky.mod.flair(text="",)    
-        #     except pc.Forbidden as f:
-        #         print(f)
-        #         continue
-                
-        #     to_post = process_post(post)
-        #     print(to_post)
-        #     reddit.subreddit("riderschallengetest").flair.set(post.author.name, text=to_post)
-        #     post.mod.sticky()
-        #     post.mod.flair(text="Current Challenge",)
+if __name__ == "__main__":
+    main()
